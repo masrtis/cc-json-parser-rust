@@ -12,6 +12,9 @@ use crate::{
 pub enum ParserError {
     Empty,
     InvalidObject,
+    InvalidString,
+    InvalidKeyValueSeparator,
+    InvalidFieldSeparator,
 }
 
 impl Error for ParserError {}
@@ -22,9 +25,13 @@ impl Display for ParserError {
     }
 }
 
+#[derive(PartialEq)]
 enum ParserState {
     Default,
     Object,
+    Key,
+    Value,
+    ExpectingKey,
 }
 
 pub struct Parser {
@@ -50,17 +57,33 @@ impl Parser {
             match token {
                 Token::OpenObject => self.state = ParserState::Object,
                 Token::CloseObject => match self.state {
-                    ParserState::Object => {}
-                    _ => {
-                        return Err(ParserError::InvalidObject);
-                    }
+                    ParserState::Object => self.state = ParserState::Default,
+                    _ => return Err(ParserError::InvalidObject),
+                },
+                Token::String(_) => match self.state {
+                    ParserState::Object => self.state = ParserState::Key,
+                    ParserState::ExpectingKey => self.state = ParserState::Key,
+                    ParserState::Value => self.state = ParserState::Object,
+                    _ => return Err(ParserError::InvalidString),
+                },
+                Token::KeyValueSeparator => match self.state {
+                    ParserState::Key => self.state = ParserState::Value,
+                    _ => return Err(ParserError::InvalidKeyValueSeparator),
+                },
+                Token::FieldSeparator => match self.state {
+                    ParserState::Object => self.state = ParserState::ExpectingKey,
+                    _ => return Err(ParserError::InvalidFieldSeparator),
                 },
             }
 
             next_token = tokenizer.get_next();
         }
 
-        Ok(JsonObject {})
+        if self.state != ParserState::Default {
+            Err(ParserError::InvalidObject)
+        } else {
+            Ok(JsonObject {})
+        }
     }
 }
 
@@ -92,5 +115,65 @@ mod tests {
 
         // THEN:
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_trailing_comma_failure() {
+        // GIVEN:
+        let json_string: &str = r#"{"key": "value",}"#;
+        let parser: Parser = Parser::new();
+
+        // WHEN:
+        let result: Result<JsonObject, ParserError> = parser.parse(json_string);
+
+        // THEN:
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_unquoted_key_failure() {
+        // GIVEN:
+        let json_string: &str = r#"{
+  "key": "value",
+  key2: "value"
+}
+"#;
+        let parser: Parser = Parser::new();
+
+        // WHEN:
+        let result: Result<JsonObject, ParserError> = parser.parse(json_string);
+
+        // THEN:
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_object_key_value_pair_success() {
+        // GIVEN:
+        let json_string: &str = r#"{"key": "value"}"#;
+        let parser: Parser = Parser::new();
+
+        // WHEN:
+        let result: Result<JsonObject, ParserError> = parser.parse(json_string);
+
+        // THEN:
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_object_multiple_key_value_pair_success() {
+        // GIVEN:
+        let json_string: &str = r#"{
+            "key": "value",
+            "key2": "value"
+          }
+          "#;
+        let parser: Parser = Parser::new();
+
+        // WHEN:
+        let result: Result<JsonObject, ParserError> = parser.parse(json_string);
+
+        // THEN:
+        assert!(result.is_ok());
     }
 }
